@@ -90,24 +90,21 @@ class AlunoOut(BaseModel):
     email: Optional[str]
     turma_id: Optional[int]
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 class ProfessorOut(BaseModel):
     id: int
     nome: str
     email: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 class DisciplinaOut(BaseModel):
     id: int
     nome: str
     codigo: Optional[str]
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 class TarefaOut(BaseModel):
     id: int
@@ -116,17 +113,18 @@ class TarefaOut(BaseModel):
     pontos: int
     status: str
 
-    class Config:
-        orm_mode = True
+    model_config = {"from_attributes": True}
 
 # Auth helpers
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password):
+    # Truncate password to 72 bytes max for bcrypt
+    password = password[:72]
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -180,48 +178,61 @@ def startup_event():
         if exists:
             return
         fake = Faker()
+        
         # create turmas
         turmas = []
         for i in range(3):
             t = Turma(nome=f"Turma {i+1}")
             db.add(t)
             turmas.append(t)
-        db.commit()
+        db.flush()
+        
         # create disciplines
         disciplinas = []
         for i in range(4):
             d = Disciplina(nome=fake.word().title(), codigo=f"D{i+1:03}")
             db.add(d)
             disciplinas.append(d)
-        db.commit()
-        # create professors
+        db.flush()
+        
+        # create professors - check for duplicates
         professors = []
         for i in range(3):
-            p = Professor(nome=fake.name(), email=f"prof{i+1}@example.com")
-            db.add(p)
-            professors.append(p)
-        db.commit()
+            email = f"prof{i+1}@example.com"
+            existing = db.query(Professor).filter(Professor.email == email).first()
+            if not existing:
+                p = Professor(nome=fake.name(), email=email)
+                db.add(p)
+                professors.append(p)
+            else:
+                professors.append(existing)
+        db.flush()
+        
         # associate professor-discipline
         for i, d in enumerate(disciplinas):
             p = professors[i % len(professors)]
-            p.disciplinas.append(d)
-        db.commit()
-        # create students
+            if d not in p.disciplinas:
+                p.disciplinas.append(d)
+        db.flush()
+        
+        # create students - check for duplicates
         for i in range(10):
             turma = turmas[i % len(turmas)]
             email = f"aluno{i+1}@example.com"
-            aluno = Aluno(nome=fake.name(), email=email, senha_hash=get_password_hash('password'), turma=turma)
-            db.add(aluno)
-        db.commit()
+            existing = db.query(Aluno).filter(Aluno.email == email).first()
+            if not existing:
+                aluno = Aluno(nome=fake.name(), email=email, senha_hash=get_password_hash('password'), turma=turma)
+                db.add(aluno)
+        db.flush()
+        
         # create tasks
-        alunos = db.query(Aluno).all()
         for i in range(8):
             d = disciplinas[i % len(disciplinas)]
             p = professors[i % len(professors)]
             ttask = Tarefa(titulo=fake.sentence(nb_words=4), descricao=fake.text(max_nb_chars=100), disciplina_id=d.id, professor_id=p.id, pontos=10)
             db.add(ttask)
         db.commit()
-        print('Seed aplicado com dados falsos. UsuÃ¡rios criados com senha: "password"')
+        print('Seed aplicado com dados falsos. Usuários criados com senha: "password"')
     finally:
         db.close()
 
